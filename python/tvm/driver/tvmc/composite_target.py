@@ -29,6 +29,7 @@ from tvm.relay.op.contrib.ethosu import partition_for_ethosu
 from tvm.relay.op.contrib.bnns import partition_for_bnns
 from tvm.relay.op.contrib.vitis_ai import partition_for_vitis_ai
 from tvm.relay.op.contrib.clml import partition_for_clml
+from tvm.relay.op.contrib.metaware import partition_for_metaware
 
 
 from tvm.driver.tvmc import TVMCException
@@ -75,6 +76,10 @@ REGISTERED_CODEGEN = {
     "clml": {
         "config_key": None,
         "pass_pipeline": partition_for_clml,
+    },
+    "metaware": {
+        "config_key": None,
+        "pass_pipeline": partition_for_metaware,
     },
 }
 

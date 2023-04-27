@@ -1086,6 +1086,11 @@ def to_onnx(relay_ir, params, name, opset_version=11, path=None):
     return onnx_model
 
 
+@tvm._ffi.register_func("relay.ext.convert_to_onnx")
+def convert_to_onnx(relay_ir, name):
+    return to_onnx(relay_ir, {}, name).SerializeToString()
+
+
 @tvm._ffi.register_func("relay.ext.onnx")
 def onnx_compiler(func):
     """Create a runtime module for ONNX from Relay Function

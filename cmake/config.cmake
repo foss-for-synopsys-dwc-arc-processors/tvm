@@ -182,6 +182,10 @@ set(USE_MKL OFF)
 # - OFF: Disable DNNL
 set(USE_DNNL OFF)
 
+# Whether to add support for Synopsys accelerators
+#
+set(USE_METAWARE OFF)
+
 # Whether use Intel AMX instructions.
 set(USE_AMX OFF)
 
