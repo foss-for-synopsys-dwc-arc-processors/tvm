@@ -33,15 +33,25 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mwtvm/mwtvm.hpp>
 #include <regex>
 #include <string>
 #include <vector>
 
-#include <mwtvm/mwtvm.hpp>
-
 namespace tvm::runtime::contrib::metaware {
 
-using snps_arc::metaware::mwtvm::SubgraphExecutionFunction;
+namespace mwtvm = snps_arc::metaware::mwtvm;
+
+/**
+ * Get a new subgraph number that is unique for this process instance.
+ *
+ * Note that a particular subgraph may have different numbers at compile time
+ * v.s. run time.
+ */
+int GetNewSubgraphNumber() {
+  static int subgraph_number = 0;
+  return subgraph_number++;
+}
 
 class MetaWareLoaderBase : public ModuleNode {
  public:
@@ -50,13 +60,18 @@ class MetaWareLoaderBase : public ModuleNode {
   static Module LoadFromBinary(void* strm) {
     dmlc::Stream* stream = static_cast<dmlc::Stream*>(strm);
     std::string symbol;
-    int subgraph_number;
+    int compile_subgraph_number;
     std::string graph_bin;
     std::vector<std::string> consts;
 
+    std::string hash;
+
+    int subgraph_number = GetNewSubgraphNumber();
+
     // Load the symbol
     ICHECK(stream->Read(&symbol)) << "Loading symbol name failed";
-    ICHECK(stream->Read(&subgraph_number)) << "Loading subgraph_number  failed";
+    ICHECK(stream->Read(&hash)) << "Loading hash failed";
+    ICHECK(stream->Read(&compile_subgraph_number)) << "Loading subgraph_number  failed";
     ICHECK(stream->Read(&graph_bin)) << "Loading graph json failed";
     ICHECK(stream->Read(&consts)) << "Loading the const name list failed";
 
@@ -65,17 +80,14 @@ class MetaWareLoaderBase : public ModuleNode {
       const_names.push_back(it);
     }
 
-    // printf("\n\n*** Load of binary with subgraph = %d!\n\n", subgraph_number);
-
-    // printf("MetaWareLoaderBase: Loading module from Binary of %d bytes...\n",
-    //        (int)graph_bin.size());
-
-    auto n = make_object<T>(symbol, subgraph_number, graph_bin, const_names);
+    auto n = make_object<T>(symbol, subgraph_number, compile_subgraph_number, graph_bin, hash,
+                            const_names);
     return Module(n);
   }
 
   void SaveToBinary(dmlc::Stream* stream) override {
     stream->Write(symbol_name_);
+    stream->Write(hash_);
 
     stream->Write(subgraph_number_);
 
@@ -93,7 +105,12 @@ class MetaWareLoaderBase : public ModuleNode {
   /*! \brief The only subgraph name for this module. */
   std::string symbol_name_;
 
+  std::string hash_;
+
   int subgraph_number_;
+  int compile_subgraph_number_;
+
+  mwtvm::GraphDescriptor graph_descriptor_;
 
   std::string mwtvm_binary;
 
@@ -102,23 +119,40 @@ class MetaWareLoaderBase : public ModuleNode {
 };
 
 /**
- * Runtime lib.  This version is for host_fixed or host_float execution for now.
+ * Information on target compilation type,
+ */
+
+static std::string calibration_path;
+
+void MetaWareSetCalibrationDirectory(String path) {
+  calibration_path = path;
+  std::string err_msg;
+
+  ICHECK(mwtvm::SetCalibrationBaseDirectory(calibration_path, err_msg))
+      << "Issue setting calibration directory: " << err_msg;
+}
+
+TVM_REGISTER_GLOBAL("runtime.MetaWareSetCalibrationDirectory")
+    .set_body_typed(MetaWareSetCalibrationDirectory);
+
+/**
+ * Runtime lib.  This version is for host_fixed or calibration execution for now.
  *
  * @todo add runtime variants for various MetaWare runtimes.
  */
 
 class MetaWareRuntime : public MetaWareLoaderBase {
-  /**
-   * The subgraph execution function is set by the Init method.
-   */
-  SubgraphExecutionFunction ExecuteSubgraph = nullptr;
+ protected:
+  mwtvm::GraphInformation graph_info_;
 
  public:
-  MetaWareRuntime(const std::string& symbol_name, int subgraph_number, String bin_data,
-                  const Array<String> const_names) {
+  MetaWareRuntime(const std::string& symbol_name, int subgraph_number, int compile_subgraph_number,
+                  String bin_data, String hash, const Array<String> const_names) {
+    hash_ = std::move(hash);
     subgraph_number_ = subgraph_number;
+    compile_subgraph_number_ = compile_subgraph_number;
 
-    mwtvm_binary = bin_data;
+    mwtvm_binary = std::move(bin_data);
 
     this->symbol_name_ = symbol_name;
   }
@@ -128,103 +162,76 @@ class MetaWareRuntime : public MetaWareLoaderBase {
   void Init(const Array<NDArray>& consts);
 
   /* Unused stub implementation */
-  void Run() {
-    printf("TODO: Unused stub implementation should not be used?\n");
-    LOG(FATAL) << "Unreachable code";
-  }
+  void Run() { LOG(FATAL) << "Unreachable code"; }
 
-  /* Thread safe implementation of Run. Keep runtime instance immutable */
+  /**
+   *  Execute subgraph with given I/O arguments.
+   */
   void Run(const TVMArgs& args) const {
-    auto extract_dl_tensor = [](const TVMArgValue& val) -> const DLTensor* {
+    /**
+     * Get DLTensor argument
+     */
+    auto ExtractTensor = [](const TVMArgValue& val) -> const DLTensor* {
       ICHECK(val.type_code() == kTVMNDArrayHandle || val.type_code() == kTVMDLTensorHandle)
           << "Expect NDArray or DLTensor";
       return val.IsObjectRef<NDArray>() ? val.operator NDArray().operator->()
                                         : val.operator DLTensor*();
     };
 
-    int input_size = 0, output_size = 0;
-
-    auto ChkTensorSize = [](const DLTensor& v) -> int {
-      int size = 1;
+    /**
+     * Extract I/O data information into the MWTVM IOTensor data structure.
+     */
+    auto SetTensorIO = [ExtractTensor, args](int idx, mwtvm::IOTensor& t) {
+      const DLTensor& v = *ExtractTensor(args[idx]);
 
       ICHECK(v.dtype.code == kTVMArgFloat) << "MetaWare Expecting floating point I/O arguments.";
 
-      for (int i = 0; i < v.ndim; i++) size *= v.shape[i];
+      t.size = 1;
+      for (int i = 0; i < v.ndim; i++) t.size *= v.shape[i];
 
-      return size;
+      t.data_type = mwtvm::TvmType::FP32;
+      t.data = v.data;
     };
 
-    /**
-     * For now, assume only 1 output, all other args are input
-     */
+    const mwtvm::GraphInformation& gi = graph_info_;
 
-    for (int i = 0; i < args.size() - 1; i++) {
-      const DLTensor* v = extract_dl_tensor(args[i]);
-      input_size += ChkTensorSize(*v);
+    ICHECK(args.size() == gi.num_inputs_ + gi.num_outputs_)
+        << "Inconsistent arg count between TVM and MWTVM";
+
+    mwtvm::IOTensor sg_inputs[gi.num_inputs_];
+
+    mwtvm::IOTensor sg_outputs[gi.num_outputs_];
+
+    for (int i = 0; i < gi.num_inputs_; i++) {
+      SetTensorIO(i, sg_inputs[i]);
     }
 
-    for (int i = args.size() - 1; i < args.size(); i++) {
-      const DLTensor* v = extract_dl_tensor(args[i]);
-      output_size += ChkTensorSize(*v);
+    for (int o = 0; o < gi.num_outputs_; o++) {
+      SetTensorIO(o + gi.num_inputs_, sg_outputs[o]);
     }
 
-    ICHECK((input_size > 0) && (output_size > 0)) << "Expect non-zero I/O sizes";
+    std::string msg;
 
-    std::vector<float> inputs, outputs(output_size);
-
-    /**
-     * The host_fixed/float subgraph implemention function requires contiguous data.
-     * Copying data is not efficient for a target execution, so execution on a real
-     * target would do this differently (and also perhaps pass fixed point data types).
-     */
-
-    for (int i = 0; i < args.size() - 1; i++) {
-      const DLTensor* v = extract_dl_tensor(args[i]);
-      int sz = ChkTensorSize(*v);
-      float* idata = (float*)v->data;
-      inputs.insert(inputs.end(), idata, idata + sz);
-    }
-
-    // printf("\n\n** MW RUN CALLING THE DL FUNCTION!\n\n");
-
-    int rv = ExecuteSubgraph(inputs.data(), (int)input_size * sizeof(float), outputs.data(),
-                             (int)output_size * sizeof(float), nullptr, nullptr);
-
-    ICHECK(rv == 0) << "Issue during execution of MetaWare subgraph implementation "
-                    << subgraph_number_ << ", return value of '" << rv << "'";
-
-    /**
-     * Copy compute results back to TVM tensor.
-     */
-    for (int i = args.size() - 1; i < args.size(); i++) {
-      const DLTensor* v = extract_dl_tensor(args[i]);
-      memcpy(v->data, outputs.data(), output_size * sizeof(float));
-    }
+    ICHECK(mwtvm::Execute(graph_descriptor_, sg_inputs, sg_outputs, msg)) << msg;
   }
 
   /* Override GetFunction to reimplement Run method */
-  PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self) override {
-    // printf("MetaWare Runtime: Calling GetFunction, name == '%s', symbol_name == '%s'!\n",
-    //        name.c_str(), symbol_name_.c_str());
-
+  PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& ptr_to_self) override {
     if (this->symbol_name_ == name) {
-      return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      return PackedFunc([ptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
         ICHECK(this->initialized_) << "The module has not been initialized";
-
-        // ICHECK_EQ(args.size(), input_var_eid_.size() + outputs_.size())
-        //     << "Found mismatch in the number of provided data entries and required.";
 
         Run(args);
       });
     } else if (name == "get_symbol") {
       return PackedFunc(
-          [sptr_to_self, this](TVMArgs args, TVMRetValue* rv) { *rv = this->symbol_name_; });
+          [ptr_to_self, this](TVMArgs args, TVMRetValue* rv) { *rv = this->symbol_name_; });
     } else if (name == "get_const_vars") {
       return PackedFunc(
-          [sptr_to_self, this](TVMArgs args, TVMRetValue* rv) { *rv = this->const_names_; });
+          [ptr_to_self, this](TVMArgs args, TVMRetValue* rv) { *rv = this->const_names_; });
     } else if ("__init_" + this->symbol_name_ == name) {
       // The function to initialize constant tensors.
-      return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      return PackedFunc([ptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
         ICHECK_EQ(args.size(), 1U);
         std::lock_guard<std::mutex> guard(this->initialize_mutex_);
         if (!this->initialized_) {
@@ -234,7 +241,6 @@ class MetaWareRuntime : public MetaWareLoaderBase {
         *rv = 0;
       });
     } else {
-      // printf("MetaWare Runtime: unknown name!\n");
       return PackedFunc(nullptr);
     }
   }
@@ -250,24 +256,28 @@ class MetaWareRuntime : public MetaWareLoaderBase {
 };
 
 /**
- * @brief Set the MetaWare working directory
+ * @brief Set the MWTVM runtime working directory
  *
- * This directory is where we can process runtime artifacts.
+ * This directory is where we can process MWTVM runtime artifacts.
  */
 
-TVM_REGISTER_GLOBAL("metaware.set_work_directory")
-    .set_body_typed(snps_arc::metaware::mwtvm::SetWorkDirectory);
+TVM_REGISTER_GLOBAL("runtime.MetaWareSetWorkDirectory")
+    .set_body_typed(mwtvm::SetRuntimeWorkDirectory);
 
 void MetaWareRuntime::Init(const Array<NDArray>& consts) {
   std::string err_message;
-  ExecuteSubgraph = snps_arc::metaware::mwtvm::Init(subgraph_number_, mwtvm_binary, err_message);
 
-  ICHECK(ExecuteSubgraph != nullptr) << err_message;
+  ICHECK(mwtvm::Init(subgraph_number_, compile_subgraph_number_, graph_descriptor_, hash_,
+                     mwtvm_binary, err_message))
+      << err_message;
+
+  ICHECK(mwtvm::GetInfo(graph_descriptor_, graph_info_, err_message)) << err_message;
 }
 
 runtime::Module MetaWareRuntimeCreate(String symbol_name, int subgraph_number, std::string bin_data,
-                                      const Array<String>& const_names) {
-  auto n = make_object<MetaWareRuntime>(symbol_name, subgraph_number, bin_data, const_names);
+                                      std::string hash, const Array<String>& const_names) {
+  auto n = make_object<MetaWareRuntime>(symbol_name, subgraph_number, subgraph_number, bin_data,
+                                        hash, const_names);
   return runtime::Module(n);
 }
 

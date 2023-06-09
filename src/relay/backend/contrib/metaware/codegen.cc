@@ -44,9 +44,10 @@
 /**
  * @todo make this an external lib.
  */
-//#include "../../../../runtime/contrib/metaware/mwtvm.h"
+// #include "../../../../runtime/contrib/metaware/mwtvm.h"
 
 #include <mwtvm/mwtvm.hpp>
+
 #include "../../utils.h"
 
 namespace tvm::relay::contrib {
@@ -58,13 +59,32 @@ using namespace backend;
 #include <fstream>
 #include <iostream>
 
-TVM_REGISTER_GLOBAL("metaware.set_compile_work_directory")
+using namespace snps_arc::metaware::mwtvm;
+
+TVM_REGISTER_GLOBAL("compile.MetaWareSetCompileWorkDirectory")
     .set_body_typed(snps_arc::metaware::mwtvm::SetCompileWorkDirectory);
+
+static CompilationType compile_mode = CompilationType::CALIBRATE;
+
+std::string MetawareSetCompilationMode(std::string mode) {
+  if (mode == "calibrate") {
+    compile_mode = CompilationType::CALIBRATE;
+  } else if (mode == "host_fixed") {
+    compile_mode = CompilationType::HOST_FIXED;
+  } else {
+    return "MetaWare compilation type `" + mode + "' not supported";
+  }
+
+  return "ok";
+}
+
+TVM_REGISTER_GLOBAL("compile.MetawareSetCompilationMode")
+    .set_body_typed(MetawareSetCompilationMode);
 
 /*!
  * \brief The external compiler/codegen tool. It takes a Relay expression/module and
  * compiles it into a runtime module.
- * 
+ *
  * For now only supporting MWTVM CompilationType::HOST_FLOAT
  */
 runtime::Module MetaWareCompiler(const ObjectRef& ref) {
@@ -85,14 +105,13 @@ runtime::Module MetaWareCompiler(const ObjectRef& ref) {
   ICHECK(pf != nullptr) << "Metaware compiler Cannot find MetaWare runtime module to create";
 
   std::string mwtvm_bin, err_message;
+  std::string hash;
 
-  using namespace snps_arc::metaware::mwtvm;
+  int subgraph_number = Compile(onnx_model, mwtvm_bin, hash, err_message, compile_mode);
 
-  int subgraph_number = Compile(onnx_model, mwtvm_bin, err_message, CompilationType::HOST_FLOAT);
+  ICHECK(subgraph_number >= 0) << "Problems running MWTVM compilation: " << err_message;
 
-  ICHECK(subgraph_number >= 0) << "Problems runing MWTVM compilation: " << err_message;
-
-  auto mod = (*pf)(func_name, subgraph_number, mwtvm_bin, const_names);
+  auto mod = (*pf)(func_name, subgraph_number, mwtvm_bin, hash, const_names);
   return mod;
 }
 
@@ -113,7 +132,6 @@ void MetaWareAttachGdb() {
   }
 }
 
-TVM_REGISTER_GLOBAL("metaware.attachGdb").set_body_typed(MetaWareAttachGdb);
+TVM_REGISTER_GLOBAL("metaware.AttachGdb").set_body_typed(MetaWareAttachGdb);
 
-}  // namespace contrib
-
+}  // namespace tvm::relay::contrib
