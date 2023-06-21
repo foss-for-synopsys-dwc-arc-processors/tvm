@@ -81,6 +81,21 @@ std::string MetawareSetCompilationMode(std::string mode) {
 TVM_REGISTER_GLOBAL("compile.MetawareSetCompilationMode")
     .set_body_typed(MetawareSetCompilationMode);
 
+/**
+ * \brief Set any extra compile options for external MWTVM compilation.
+ */
+
+std::string MetaWareExtraCompileOptions(const std::string& target, const std::string& options) {
+  std::string err_message;
+
+  ICHECK(SetExtraCompileOptions(target, options, err_message)) << err_message;
+
+  return "ok";
+}
+
+TVM_REGISTER_GLOBAL("compile.MetawareSetCompilationOptions")
+    .set_body_typed(MetaWareExtraCompileOptions);
+
 /*!
  * \brief The external compiler/codegen tool. It takes a Relay expression/module and
  * compiles it into a runtime module.

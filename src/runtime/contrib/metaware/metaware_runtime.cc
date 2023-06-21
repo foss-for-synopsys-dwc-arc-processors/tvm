@@ -124,12 +124,14 @@ class MetaWareLoaderBase : public ModuleNode {
 
 static std::string calibration_path;
 
-void MetaWareSetCalibrationDirectory(String path) {
+std::string MetaWareSetCalibrationDirectory(String path) {
   calibration_path = path;
   std::string err_msg;
 
   ICHECK(mwtvm::SetCalibrationBaseDirectory(calibration_path, err_msg))
       << "Issue setting calibration directory: " << err_msg;
+
+  return "ok";
 }
 
 TVM_REGISTER_GLOBAL("runtime.MetaWareSetCalibrationDirectory")
