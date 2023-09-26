@@ -34,6 +34,8 @@ import threading
 import multiprocessing
 import time
 import errno
+import os
+import shutil
 import tvm._ffi
 
 from tvm._ffi.base import py_str
@@ -78,6 +80,7 @@ def _server_env(load_library, work_path=None):
         path = temp.relpath(file_name)
         m = _load_module(path)
         logger.info("load_module %s", path)
+        shutil.rmtree(os.path.dirname(path))
         return m
 
     @tvm._ffi.register_func("tvm.rpc.server.download_linked_module", override=True)
