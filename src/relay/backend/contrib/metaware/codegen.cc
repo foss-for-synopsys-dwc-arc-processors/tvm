@@ -71,6 +71,8 @@ std::string MetawareSetCompilationMode(std::string mode) {
     compile_mode = CompilationType::CALIBRATE;
   } else if (mode == "host_fixed") {
     compile_mode = CompilationType::HOST_FIXED;
+  } else if (mode == "unmerged_large") {
+    compile_mode = CompilationType::TARGET;
   } else {
     return "MetaWare compilation type `" + mode + "' not supported";
   }
