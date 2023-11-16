@@ -269,11 +269,18 @@ TVM_REGISTER_GLOBAL("runtime.MetaWareSetWorkDirectory")
 void MetaWareRuntime::Init(const Array<NDArray>& consts) {
   std::string err_message;
 
+  static bool build_running = false;
+
+  ICHECK(!build_running) << "MWTVM re-entrant builds not supported!";
+  build_running = true;
+
   ICHECK(mwtvm::Init(subgraph_number_, compile_subgraph_number_, graph_descriptor_, hash_,
                      mwtvm_binary, err_message))
       << err_message;
 
   ICHECK(mwtvm::GetInfo(graph_descriptor_, graph_info_, err_message)) << err_message;
+  
+  build_running = false;
 }
 
 runtime::Module MetaWareRuntimeCreate(String symbol_name, int subgraph_number, std::string bin_data,

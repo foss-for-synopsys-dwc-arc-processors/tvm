@@ -65,14 +65,18 @@ TVM_REGISTER_GLOBAL("compile.MetaWareSetCompileWorkDirectory")
     .set_body_typed(snps_arc::metaware::mwtvm::SetCompileWorkDirectory);
 
 static CompilationType compile_mode = CompilationType::CALIBRATE;
+static ExecutionMechanism execute_mechanism = ExecutionMechanism::DEFAULT;
+static std::string target_details = "";
 
 std::string MetawareSetCompilationMode(std::string mode) {
   if (mode == "calibrate") {
     compile_mode = CompilationType::CALIBRATE;
   } else if (mode == "host_fixed") {
     compile_mode = CompilationType::HOST_FIXED;
-  } else if (mode == "unmerged_large") {
+  } else if (mode == "unmerged_large:vdk_fixed:EV64_full_dnn3520_nhvdk") {
     compile_mode = CompilationType::TARGET;
+    execute_mechanism = ExecutionMechanism::VDK_FIXED;
+    target_details = "EV64_full_dnn3520_nhvdk";
   } else {
     return "MetaWare compilation type `" + mode + "' not supported";
   }
@@ -124,7 +128,8 @@ runtime::Module MetaWareCompiler(const ObjectRef& ref) {
   std::string mwtvm_bin, err_message;
   std::string hash;
 
-  int subgraph_number = Compile(onnx_model, mwtvm_bin, hash, err_message, compile_mode);
+  int subgraph_number = Compile(onnx_model, mwtvm_bin, hash, err_message, compile_mode,
+                                execute_mechanism, target_details);
 
   ICHECK(subgraph_number >= 0) << "Problems running MWTVM compilation: " << err_message;
 

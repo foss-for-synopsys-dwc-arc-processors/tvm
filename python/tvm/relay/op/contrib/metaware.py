@@ -32,6 +32,7 @@ it is supported. For example:
 - The other way is to implement the function by themselves to
 check the attributes of the op and decide if it should be offloaded to METAWARE.
 """
+import os
 import logging
 from functools import reduce
 
@@ -69,6 +70,10 @@ def get_attrs(expr):
         return get_attrs(expr.tuple_value)
     return {}
 
+# Temporary hack to only process one sub-graph if environment variable
+# MWTVM_SINGLE_GRAPH is defined
+#
+single_graph_found = False
 
 def _register_external_op_helper(op_name, supported=True):
     """The helper function to indicate that a given operator can be supported
@@ -87,6 +92,7 @@ def _register_external_op_helper(op_name, supported=True):
 
     @tvm.ir.register_op_attr(op_name, "target.metaware")
     def _func_wrapper(expr):
+        global single_graph_found
         args = expr.args
         if any([x.checked_type.dtype == "int64" for x in args]):
             logger.info("METAWARE does not support int64.")
@@ -96,6 +102,12 @@ def _register_external_op_helper(op_name, supported=True):
             attrs = dict(get_attrs(expr))
             if "ceil_mode" in attrs.keys() and attrs["ceil_mode"]:
                 return False
+            
+        if os.getenv('MWTVM_SINGLE_GRAPH') and single_graph_found:
+            print("MWTVM work-around: supporting one subgraph only!")
+            return False
+        
+        single_graph_found = supported
 
         return supported
 
