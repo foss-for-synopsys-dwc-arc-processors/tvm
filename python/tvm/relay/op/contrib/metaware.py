@@ -73,7 +73,7 @@ def get_attrs(expr):
 
 # Temporary debug/test hooks.  In various compile modes, we may want to support
 # a subset of operators, only a single graph, etc.  As things are tested/debugged,
-# we can relax these bring-up constraints.
+# we can relax these bring-up constraints, and remove this debugging stuff.
 #
 single_graph_found = False
 single_graph_mode = os.getenv("MWTVM_SINGLE_GRAPH")
@@ -81,8 +81,8 @@ get_compile_mode = tvm.get_global_func("compile.MetawareGetCompilationMode")
 
 # ops we are currently testing in single-graph mode
 #
-#ul_ops = ["add", "nn.conv2d", "nn.relu", "nn_maxpool_2d"]
-ul_ops = ["nn_maxpool_2d"]
+ul_ops = ["add", "nn.conv2d", "nn.relu", "nn_maxpool_2d"]
+#ul_ops = ["nn_maxpool_2d", "nn.conv2d"]
 
 
 def _register_external_op_helper(op_name, supported=True):
@@ -104,6 +104,13 @@ def _register_external_op_helper(op_name, supported=True):
     def _func_wrapper(expr):
         global single_graph_found
         compile_mode = get_compile_mode()
+
+        # -- for now, in single graph mode, skip convolutions with < 4 channels
+        #
+        if single_graph_mode and op_name == "nn.conv2d":
+            s = expr.args[0].checked_type.shape
+            if s[1] < 4:
+                return False
 
         if single_graph_mode and op_name not in ul_ops:
             return False
