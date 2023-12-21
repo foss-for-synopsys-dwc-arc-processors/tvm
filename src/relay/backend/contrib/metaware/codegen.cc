@@ -64,11 +64,14 @@ using namespace snps_arc::metaware::mwtvm;
 TVM_REGISTER_GLOBAL("compile.MetaWareSetCompileWorkDirectory")
     .set_body_typed(snps_arc::metaware::mwtvm::SetCompileWorkDirectory);
 
+static std::string current_compile_mode;
 static CompilationType compile_mode = CompilationType::CALIBRATE;
 static ExecutionMechanism execute_mechanism = ExecutionMechanism::DEFAULT;
 static std::string target_details = "";
 
 std::string MetawareSetCompilationMode(std::string mode) {
+  current_compile_mode = mode;
+
   if (mode == "calibrate") {
     compile_mode = CompilationType::CALIBRATE;
   } else if (mode == "host_fixed") {
@@ -86,6 +89,13 @@ std::string MetawareSetCompilationMode(std::string mode) {
 
 TVM_REGISTER_GLOBAL("compile.MetawareSetCompilationMode")
     .set_body_typed(MetawareSetCompilationMode);
+
+std::string MetawareGetCompilationMode() {
+  return current_compile_mode;
+}
+
+TVM_REGISTER_GLOBAL("compile.MetawareGetCompilationMode")
+    .set_body_typed(MetawareGetCompilationMode);
 
 /**
  * \brief Set any extra compile options for external MWTVM compilation.

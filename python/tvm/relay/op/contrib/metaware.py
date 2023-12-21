@@ -70,10 +70,20 @@ def get_attrs(expr):
         return get_attrs(expr.tuple_value)
     return {}
 
-# Temporary hack to only process one sub-graph if environment variable
-# MWTVM_SINGLE_GRAPH is defined
+
+# Temporary debug/test hooks.  In various compile modes, we may want to support
+# a subset of operators, only a single graph, etc.  As things are tested/debugged,
+# we can relax these bring-up constraints, and remove this debugging stuff.
 #
 single_graph_found = False
+single_graph_mode = os.getenv("MWTVM_SINGLE_GRAPH")
+get_compile_mode = tvm.get_global_func("compile.MetawareGetCompilationMode")
+
+# ops we are currently testing in single-graph mode
+#
+ul_ops = ["add", "nn.conv2d", "nn.relu", "nn_maxpool_2d"]
+#ul_ops = ["nn_maxpool_2d", "nn.conv2d"]
+
 
 def _register_external_op_helper(op_name, supported=True):
     """The helper function to indicate that a given operator can be supported
@@ -93,6 +103,18 @@ def _register_external_op_helper(op_name, supported=True):
     @tvm.ir.register_op_attr(op_name, "target.metaware")
     def _func_wrapper(expr):
         global single_graph_found
+        compile_mode = get_compile_mode()
+
+        # -- for now, in single graph mode, skip convolutions with < 4 channels
+        #
+        if single_graph_mode and op_name == "nn.conv2d":
+            s = expr.args[0].checked_type.shape
+            if s[1] < 4:
+                return False
+
+        if single_graph_mode and op_name not in ul_ops:
+            return False
+
         args = expr.args
         if any([x.checked_type.dtype == "int64" for x in args]):
             logger.info("METAWARE does not support int64.")
@@ -102,11 +124,13 @@ def _register_external_op_helper(op_name, supported=True):
             attrs = dict(get_attrs(expr))
             if "ceil_mode" in attrs.keys() and attrs["ceil_mode"]:
                 return False
-            
-        if os.getenv('MWTVM_SINGLE_GRAPH') and single_graph_found:
-            print("MWTVM work-around: supporting one subgraph only!")
+
+        if single_graph_mode and single_graph_found:
+            print(
+                f"MWTVM debugging limit: not supporting '{op_name}' operator, compile_mode is '{compile_mode}'!"
+            )
             return False
-        
+
         single_graph_found = supported
 
         return supported
@@ -114,9 +138,9 @@ def _register_external_op_helper(op_name, supported=True):
     return _func_wrapper
 
 
-'''
+"""
 Start with simple operators for testing!
-'''
+"""
 
 _register_external_op_helper("add")
 _register_external_op_helper("nn.conv2d")
@@ -145,9 +169,9 @@ def partition_for_metaware(mod, params=None, mod_name="default"):
     seq = tvm.transform.Sequential(
         [
             transform.AnnotateTarget("metaware"),
-            transform.MergeCompilerRegions(), # some targets do this after partition?
+            transform.MergeCompilerRegions(),  # some targets do this after partition?
             transform.PartitionGraph(),
-            transform.InferType()
+            transform.InferType(),
         ]
     )
 
