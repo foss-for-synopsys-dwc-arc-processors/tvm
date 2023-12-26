@@ -81,8 +81,8 @@ get_compile_mode = tvm.get_global_func("compile.MetawareGetCompilationMode")
 
 # ops we are currently testing in single-graph mode
 #
-ul_ops = ["add", "nn.conv2d", "nn.relu", "nn_maxpool_2d"]
-#ul_ops = ["nn_maxpool_2d", "nn.conv2d"]
+#ul_ops = ["add", "nn.conv2d", "nn.relu", "nn.max_pool2d"]
+ul_ops = ["nn.max_pool2d", "nn.conv2d"] #TODO: Multiple inputs support for Add layer
 
 
 def _register_external_op_helper(op_name, supported=True):
@@ -105,11 +105,11 @@ def _register_external_op_helper(op_name, supported=True):
         global single_graph_found
         compile_mode = get_compile_mode()
 
-        # -- for now, in single graph mode, skip convolutions with < 4 channels
+        # -- for now, in single graph mode, skip convolutions with 3 channeled input
         #
         if single_graph_mode and op_name == "nn.conv2d":
             s = expr.args[0].checked_type.shape
-            if s[1] < 4:
+            if s[1] == 3:
                 return False
 
         if single_graph_mode and op_name not in ul_ops:
@@ -145,7 +145,7 @@ Start with simple operators for testing!
 _register_external_op_helper("add")
 _register_external_op_helper("nn.conv2d")
 _register_external_op_helper("nn.relu")
-_register_external_op_helper("nn.maxpool_2d")
+_register_external_op_helper("nn.max_pool2d")
 
 
 def partition_for_metaware(mod, params=None, mod_name="default"):
